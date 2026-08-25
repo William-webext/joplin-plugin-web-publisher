@@ -6,6 +6,7 @@
 A companion plugin for [Joplin Web Portal](https://github.com/william-webext/joplin-web) — the self-hosted, read-only web viewer for your notes.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](./LICENSE)
+[![npm version](https://img.shields.io/npm/v/joplin-plugin-web-publisher)](https://www.npmjs.com/package/joplin-plugin-web-publisher)
 ![Joplin Plugin](https://img.shields.io/badge/Joplin-plugin-1071d3)
 
 </div>
@@ -30,9 +31,12 @@ This plugin is the "publish" half of a pair — it needs a running instance of *
 
 ## Installation
 
-Once published to the official Joplin plugin repository, you'll be able to install it directly from **Joplin → Options → Plugins → search "Web Publisher"**.
+Search **"Web Publisher"** directly from **Joplin → Options → Plugins**, or install it from its listing pages:
 
-Until then, or if you'd rather install manually:
+- 🧩 [Joplin plugin listing](https://joplinapp.org/plugins/plugin/com.william.webppublisher/)
+- 📥 [npm package](https://www.npmjs.com/package/joplin-plugin-web-publisher)
+
+Prefer installing manually?
 1. Download the `.jpl` file from [Releases](../../releases)
 2. In Joplin: **Options → Plugins → Install from file** → select the `.jpl`
 
