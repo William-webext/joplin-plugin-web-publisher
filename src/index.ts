@@ -68,6 +68,11 @@ joplin.plugins.register({
 		// pannello e della dialog di pubblicazione. Le webview di Joplin eseguono HTML/JS iniettato:
 		// senza questo escape, una cartella con un titolo malevolo (anche solo condivisa da terzi)
 		// potrebbe eseguire codice nel contesto del plugin.
+		// L'emoji 👥 ha un colore diverso per ogni font di sistema (viola su Windows/Segoe UI Emoji,
+		// grigio/nero altrove) — le emoji a colori ignorano il CSS `color`, quindi non è possibile
+		// intonarla al resto dell'interfaccia. Un'icona SVG inline resta invece coerente ovunque.
+		const GROUP_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6cb6ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px; margin-right:2px;"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+
 		const escapeHtml = (value: any): string => {
 			if (value === null || value === undefined) return '';
 			return String(value)
@@ -165,15 +170,24 @@ joplin.plugins.register({
 			const auth = await getAuthPayload();
 
 			let publishedFolders: any[] = [];
+			let groupsList: any[] = [];
 			try {
 				if (auth.email && auth.password) {
 					const session = await getSessionToken(serverUrl, auth);
 					if (session) {
-						const response = await fetchWithTimeout(`${serverUrl}/api/published-list`, {
-							headers: { 'Authorization': `Bearer ${session.token}` },
-						}, 3000);
+						const authHeader = { 'Authorization': `Bearer ${session.token}` };
+
+						const response = await fetchWithTimeout(`${serverUrl}/api/published-list`, { headers: authHeader }, 3000);
 						const data = await response.json();
 						publishedFolders = data.folders || [];
+
+						// Serve solo per risolvere gli id gruppo in nomi leggibili qui sotto:
+						// /api/published-list restituisce allowedGroups come id, non come nomi.
+						if (publishedFolders.some(f => f.visibility === 'custom')) {
+							const ugRes = await fetchWithTimeout(`${serverUrl}/api/users-and-groups`, { headers: authHeader }, 3000);
+							const ugData = await ugRes.json();
+							groupsList = ugData.groups || [];
+						}
 					}
 				}
 			} catch (err: any) {}
@@ -193,13 +207,27 @@ joplin.plugins.register({
 						if (localPath) displayTitle = localPath;
 					} catch (e) {}
 
+					let sharedWithHtml = '';
+					if (f.visibility === 'custom') {
+						const groupNames: string[] = (f.allowedGroups || []).map((gid: string) => {
+							const g = groupsList.find(gr => gr.id === gid);
+							return g ? GROUP_ICON_SVG + escapeHtml(g.name) : null;
+						}).filter(Boolean);
+						const userNames: string[] = (f.allowedUsers || []).map((email: string) => escapeHtml(email));
+						const combined = [...groupNames, ...userNames];
+						if (combined.length > 0) {
+							sharedWithHtml = `<div style="font-size:11px; opacity:0.7; margin-bottom:10px; word-break:break-word;">Shared with: ${combined.join(', ')}</div>`;
+						}
+					}
+
 					itemsHtml += `
 						<div style="background: var(--joplin-background-color-2, #2a2e33); border: 1px solid var(--joplin-divider-color, #3a3f45); border-radius: 6px; padding: 10px; margin-bottom: 10px;">
 							<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; font-size:13px;">
 								<strong style="word-break: break-word;">📁 ${escapeHtml(displayTitle)}</strong>
 								<span style="font-size:10px; background:#0e639c; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; flex-shrink:0; margin-left:6px;">${visBadge}</span>
 							</div>
-							<div style="font-size:11px; opacity:0.7; margin-bottom:10px;">Web Notes: <b>${f.notesCount}</b></div>
+							<div style="font-size:11px; opacity:0.7; margin-bottom:${sharedWithHtml ? '2px' : '10px'};">Web Notes: <b>${f.notesCount}</b></div>
+							${sharedWithHtml}
 							<div style="display:flex; gap:6px;">
 								<button style="flex:1; padding:6px; background:#0e639c; color:white; border:none; border-radius:4px; font-weight:600; cursor:pointer; font-size:11px;" onclick="webviewApi.postMessage({ action: 'editPublish', folderId: '${f.id}' })">⚙️ Edit Access</button>
 								<button style="flex:1; padding:6px; background:#a93226; color:white; border:none; border-radius:4px; font-weight:600; cursor:pointer; font-size:11px;" onclick="webviewApi.postMessage({ action: 'removePublish', folderId: '${f.id}' })">🗑️ Unpublish</button>
@@ -336,7 +364,7 @@ joplin.plugins.register({
 					let groupsCheckboxes = groups.map((g, idx) => {
 						const isChecked = currentAllowedGroups.includes(g.id) ? 'checked' : '';
 						const safeName = escapeHtml(g.name);
-						return `<label class="check-item"><input type="checkbox" name="group_${idx}" value="${escapeHtml(g.id)}" ${isChecked}><span title="${safeName}">👥 ${safeName}</span></label>`;
+						return `<label class="check-item"><input type="checkbox" name="group_${idx}" value="${escapeHtml(g.id)}" ${isChecked}><span title="${safeName}">${GROUP_ICON_SVG}${safeName}</span></label>`;
 					}).join('');
 
 					const isCustomShow = currentVis === 'custom' ? 'block' : 'none';
@@ -360,7 +388,12 @@ joplin.plugins.register({
 									<select name="visibility" onchange="
 										const desc = document.getElementById('visDesc');
 										const box = document.getElementById('customOptionsBox');
+										const notifyBox = document.getElementById('notifyBox');
+										const notifyCaption = document.getElementById('notifyCaption');
 										box.style.display = (this.value === 'custom' ? 'block' : 'none');
+										notifyBox.style.display = (this.value === 'private' || this.value === 'custom') ? 'block' : 'none';
+										if(this.value === 'private') notifyCaption.innerText = 'Will email all registered users.';
+										else if(this.value === 'custom') notifyCaption.innerText = 'Will email only the newly added people.';
 										if(this.value === 'public') desc.innerText = '🌍 Visible to anyone on the web without login.';
 										else if(this.value === 'private') desc.innerText = '🔒 Visible to all authenticated registered users.';
 										else if(this.value === 'custom') desc.innerText = '🎯 Restricted to selected groups and users below.';
@@ -387,6 +420,14 @@ joplin.plugins.register({
 										<strong style="font-size:11px; color:#569cd6; text-transform:uppercase;">Authorized Specific Users:</strong>
 										<div class="list-box">${usersCheckboxes || '<span style="font-size:11px; opacity:0.5;">No users available</span>'}</div>
 									</div>
+								</div>
+
+								<div id="notifyBox" style="display: ${(currentVis === 'private' || currentVis === 'custom') ? 'block' : 'none'}; margin-top: 10px;">
+									<label class="check-item">
+										<input type="checkbox" name="notifyNewPeople">
+										<span>📧 Notify by email</span>
+									</label>
+									<div id="notifyCaption" class="pub-desc" style="margin-top:2px;">${currentVis === 'private' ? 'Will email all registered users.' : 'Will email only the newly added people.'}</div>
 								</div>
 							</form>
 						</div>
@@ -415,6 +456,38 @@ joplin.plugins.register({
 							await showMessage('⚠️ Please select at least one authorized group or user for Custom Access.');
 							continue;
 						}
+					}
+
+					// Per 'Registered Users' non esiste un elenco di destinatari specifico: la notifica,
+					// se richiesta, va a tutti gli utenti registrati sul portale, senza calcolo di 'novità'
+					// (il concetto stesso di 'nuovo' non si applica a questa visibilità). Per 'custom'
+					// invece si notifica solo chi è davvero nuovo rispetto a prima di questa modifica —
+					// non chi era già autorizzato individualmente o tramite un gruppo già presente, altrimenti
+					// ogni ripubblicazione (es. dopo una modifica al contenuto) spammerebbe chi ha già accesso.
+					let notifyEmails: string[] = [];
+					if (visibility === 'private' && formData['notifyNewPeople']) {
+						notifyEmails = users.map(u => u.email);
+					} else if (visibility === 'custom' && formData['notifyNewPeople']) {
+						const newlyAddedUserEmails = allowedUsers.filter(e => !currentAllowedUsers.includes(e));
+						const newlyAddedGroupIds = allowedGroups.filter(gid => !currentAllowedGroups.includes(gid));
+
+						const previouslyCoveredEmails = new Set<string>(currentAllowedUsers);
+						groups.forEach(g => {
+							if (currentAllowedGroups.includes(g.id) && Array.isArray(g.members)) {
+								g.members.forEach((m: string) => previouslyCoveredEmails.add(m));
+							}
+						});
+
+						const notifySet = new Set<string>();
+						newlyAddedUserEmails.forEach(e => { if (!previouslyCoveredEmails.has(e)) notifySet.add(e); });
+						newlyAddedGroupIds.forEach(gid => {
+							const g = groups.find(gr => gr.id === gid);
+							if (g && Array.isArray(g.members)) {
+								g.members.forEach((m: string) => { if (!previouslyCoveredEmails.has(m)) notifySet.add(m); });
+							}
+						});
+
+						notifyEmails = Array.from(notifySet);
 					}
 
 					try {
@@ -447,6 +520,7 @@ joplin.plugins.register({
 							auth: auth,
 							folders: foldersPayload,
 							notes: allNotes,
+							notifyEmails,
 						};
 
 						const apiResponse = await fetchWithTimeout(`${serverUrl}/api/publish`, {
@@ -458,9 +532,10 @@ joplin.plugins.register({
 						if (apiResponse.ok) {
 							if (panelHandle && isPanelVisible) await renderPanelContent();
 							const subCountMsg = targetFolders.length > 1 ? `<br><br><i>Included ${targetFolders.length - 1} sub-notebook(s).</i>` : '';
+							const notifyMsg = notifyEmails.length > 0 ? `<br><br><i>📧 Email notification requested for ${notifyEmails.length} ${notifyEmails.length === 1 ? 'person' : 'people'}.</i>` : '';
 							await showMessage(visibility === 'remove' 
 								? `🗑️ Publication removed.${subCountMsg}` 
-								: `✅ Notebook <b>"${escapeHtml(rootPath || rootFolder.title)}"</b> published successfully!${subCountMsg}`);
+								: `✅ Notebook <b>"${escapeHtml(rootPath || rootFolder.title)}"</b> published successfully!${subCountMsg}${notifyMsg}`);
 						} else {
 							const resErr = await apiResponse.json();
 							await showMessage(`❌ ${escapeHtml(resErr.error || 'Operation failed.')}`);
